@@ -28,6 +28,7 @@ mopidy-nowplaying to your Mopidy configuration file:
 # TODO: Add example of extension config
 ```
 
+The user that runs mopidy will need to be able to write to the framebuffer. In Ubuntu,you can add the mopidy user to the video group to achieve that. No doubt something similar works in other environments.
 
 ## Project resources
 
