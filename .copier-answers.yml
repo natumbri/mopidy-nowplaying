@@ -1,0 +1,9 @@
+_commit: v2.1.1
+_src_path: gh:mopidy/cookiecutter-mopidy-ext
+author_email: natumbri@gmail.com
+author_full_name: Nik Tumbri
+dist_name: mopidy-nowplaying
+ext_name: nowplaying
+github_username: natumbri
+short_description: Mopidy extension for displaying 'now playing' screen on HDMI via
+    framebuffer
