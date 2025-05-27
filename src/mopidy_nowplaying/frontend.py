@@ -15,7 +15,6 @@ logger = logging.getLogger(__name__)
 
 
 class NowPlayingFrontend(pykka.ThreadingActor, core.CoreListener):
-
     def __init__(self, config, core):
         super().__init__()
         self.core = core
@@ -49,6 +48,11 @@ class NowPlayingFrontend(pykka.ThreadingActor, core.CoreListener):
         self.screen.fill((0, 0, 0))
         self.write_framebuffer()
 
+    def playback_state_changed(self, old_state, new_state):
+        if new_state == 'stopped':
+            self.screen.fill((0, 0, 0))
+            self.write_framebuffer()
+
     def update_image(self, image_path):
         try:
             image, image_rect = self.transformScaleKeepRatio(
@@ -58,7 +62,7 @@ class NowPlayingFrontend(pykka.ThreadingActor, core.CoreListener):
             self.screen.fill((0, 0, 0))
             self.screen.blit(image, image_rect)
             self.write_framebuffer()
-                        
+
         except Exception as e:
             logger.error(f"Failed to update image: {e}")
 
@@ -86,7 +90,6 @@ class NowPlayingFrontend(pykka.ThreadingActor, core.CoreListener):
         self.update_album_art(art)
 
     def update_album_art(self, art=None):
-
         if art is not None:
             if art.startswith("/local/") or art.startswith("/youtube/"):
                 art = f"http://{self.hostname}:{self.port}{art}"
@@ -95,7 +98,7 @@ class NowPlayingFrontend(pykka.ThreadingActor, core.CoreListener):
                 response = requests.get(art, stream=True)
                 response.raise_for_status()  # Raise HTTPError for bad responses (4xx or 5xx)
                 self.update_image(io.BytesIO(response.content))
-            
+
             # TODO: What if it isn't a url?  What if it's a file?
 
     def transformScaleKeepRatio(self, image, size):

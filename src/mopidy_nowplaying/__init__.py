@@ -22,8 +22,6 @@ class Extension(ext.Extension):
         return schema
 
     def setup(self, registry):
-
         from .frontend import NowPlayingFrontend
+
         registry.add("frontend", NowPlayingFrontend)
-
-
