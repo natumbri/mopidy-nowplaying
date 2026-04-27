@@ -1,13 +1,14 @@
 import logging
-import os
-import threading
-import time
 
 import pygame
 import pykka
 import requests
 import io
-from mopidy import core
+from mopidy import core, httpclient
+
+import threading
+import time
+import os
 
 from . import Extension
 
@@ -19,37 +20,67 @@ class NowPlayingFrontend(pykka.ThreadingActor, core.CoreListener):
         super().__init__()
         self.core = core
         self.config = config
-
+        logger.info(f'nowplaying: {config.get('proxy')}')
         # relies on mopidy-http to be configured and running
         self.hostname = self.config.get("http").get("hostname")
         self.port = self.config.get("http").get("port")
+
+        # Initialize a standard Requests session
+        self.session = requests.Session()
+        # self.session.proxies.update(httpclient.format_proxy(config.get('proxy', {})))
+        self.session.headers.update({'User-Agent': httpclient.format_user_agent()})
 
         # move hardcoded to config
         self.fill_percent = 0.7
         self.framebuffer_number = 0
         self.framebuffer = f"fb{self.framebuffer_number}"
-        self.framebuffer_dimensions = open(
-            f"/sys/class/graphics/{self.framebuffer}/virtual_size", "r"
-        ).read()
-
+        self.fb_device = f"/dev/{self.framebuffer}"
+        self.framebuffer_dimensions = None
+        
     def write_framebuffer(self):
-        with open(f"/dev/{self.framebuffer}", "wb") as f:
-            f.write(self.screen.get_buffer())
+        try:
+            with open(self.fb_device, "wb") as f:
+                f.write(self.screen.get_buffer())
+            logger.debug(f"mopidy-nowplaying: Wrote to {self.fb_device}")
+        except Exception as e:
+            logger.error(f"mopidy-nowplaying: Failed to write to {self.fb_device}: {e}")
 
     def on_start(self):
-        self.surfaceSize = tuple(
-            int(el) for el in self.framebuffer_dimensions.strip().split(",")
-        )
-        self.screen = pygame.Surface(self.surfaceSize)
-        self.screen.fill((0, 0, 0))
-        self.write_framebuffer()
+        # Spawn a background thread so Mopidy can continue loading
+        self.init_thread = threading.Thread(target=self._bg_wait_for_display, daemon=True)
+        self.init_thread.start()
+
+    def _bg_wait_for_display(self):
+        
+        # Indefinite loop: Check every 5 seconds if fb0 exists
+        while not os.path.exists(self.fb_device):
+            logger.debug(f"mopidy-nowplaying: {self.fb_device} not found. Waiting...")
+            time.sleep(5)
+
+        logger.info(f"mopidy-nowplaying: {self.fb_device} detected! Initializing display...")
+        
+        # Once found, perform the actual display initialization
+        try:
+            self.framebuffer_dimensions = open(
+                f"/sys/class/graphics/{self.framebuffer}/virtual_size", "r"
+            ).read()
+
+            self.surfaceSize = tuple(
+                int(el) for el in self.framebuffer_dimensions.strip().split(",")
+            )
+            self.scaledSize = tuple(element * self.fill_percent for element in self.surfaceSize)
+            self.screen = pygame.Surface(self.surfaceSize)
+            self.screen.fill((0, 0, 0))
+            self.write_framebuffer()
+        except Exception as e:
+            logger.error(f"mopidy-nowplaying: Failed to initialize display after {self.fb_device} appeared: {e}")
 
     def on_stop(self):
         self.screen.fill((0, 0, 0))
         self.write_framebuffer()
 
     def playback_state_changed(self, old_state, new_state):
-        if new_state == 'stopped':
+        if new_state == "stopped":
             self.screen.fill((0, 0, 0))
             self.write_framebuffer()
 
@@ -57,7 +88,19 @@ class NowPlayingFrontend(pykka.ThreadingActor, core.CoreListener):
         try:
             image, image_rect = self.transformScaleKeepRatio(
                 pygame.image.load(image_path),
-                tuple(element * self.fill_percent for element in self.surfaceSize),
+                self.scaledSize,
+            )
+
+            # make near-blacks, black for TV display. 
+            # I think it looks better like that on a screen. 
+            pygame.transform.threshold(
+                image,
+                image,
+                search_color=(0,0,0),
+                threshold=(25,25,25),
+                set_color=(0,0,0),
+                set_behavior=1,
+                inverse_set=1,
             )
             self.screen.fill((0, 0, 0))
             self.screen.blit(image, image_rect)
@@ -95,7 +138,7 @@ class NowPlayingFrontend(pykka.ThreadingActor, core.CoreListener):
                 art = f"http://{self.hostname}:{self.port}{art}"
 
             if art.startswith("http://") or art.startswith("https://"):
-                response = requests.get(art, stream=True)
+                response = self.session.get(art, stream=True)
                 response.raise_for_status()  # Raise HTTPError for bad responses (4xx or 5xx)
                 self.update_image(io.BytesIO(response.content))
 
