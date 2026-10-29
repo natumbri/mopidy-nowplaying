@@ -19,6 +19,9 @@ class Extension(ext.Extension):
 
     def get_config_schema(self):
         schema = super().get_config_schema()
+        schema["lyrics_enabled"] = config.Boolean(optional=True)
+        schema["lyrics_offset_ms"] = config.Integer(optional=True)
+        schema["lyrics_font"] = config.String(optional=True)        
         return schema
 
     def setup(self, registry):
