@@ -257,16 +257,16 @@ class NowPlayingFrontend(pykka.ThreadingActor, core.CoreListener):
                     lyrics = self._lyrics
                 if lyrics and self._clock.running:
                     position = self._clock.now_ms() - self.lyrics_offset_ms
-                    index = lyrics.index_at(position)
+                    index = lyrics.index_at(position, lead_ms=500, min_word_dwell_ms=1000)
                     with self._lock:
                         changed = lyrics is self._lyrics and index != self._line_index
                         if changed:
                             self._line_index = index
                     if changed:
                         self.render()
-                    due = lyrics.time_at(index + 1)
-                    if due is not None:
-                        timeout = max(0.01, (due - position) / 1000)
+                    next_time = lyrics.time_at(index + 1)
+                    if next_time is not None:
+                        timeout = max(0.01, (next_time - position) / 1000)
             except Exception:
                 logger.exception("mopidy-nowplaying: lyrics ticker error")
                 timeout = 1.0
@@ -365,11 +365,11 @@ class NowPlayingFrontend(pykka.ThreadingActor, core.CoreListener):
         top_h = max(self._art_rect.top, int(height * 0.1))
         bottom_h = max(height - self._art_rect.bottom, int(height * 0.15))
 
-        top = self._fit([(lyrics.text(index - 1), 0.032, LYRIC_NEIGHBOUR, 2)], max_w, top_h)
+        top = self._fit([(lyrics.text(index - 1), 0.032, LYRIC_NEIGHBOUR, 2, False)], max_w, top_h)
         bottom = self._fit(
             [
-                (lyrics.text(index), 0.05, LYRIC_CURRENT, 2),
-                (lyrics.text(index + 1), 0.032, LYRIC_NEIGHBOUR, 1),
+                (lyrics.text(index), 0.05, LYRIC_CURRENT, 2, True),
+                (lyrics.text(index + 1), 0.032, LYRIC_NEIGHBOUR, 1, False),
             ],
             max_w,
             bottom_h,
@@ -378,14 +378,21 @@ class NowPlayingFrontend(pykka.ThreadingActor, core.CoreListener):
         self._blit_stack(bottom, height - bottom_h, bottom_h)
 
     def _fit(self, items, max_w, max_h):
-        """Render (text, relative_size, colour, max_lines) items to fit max_h."""
+        """Render (text, relative_size, colour, max_lines, bold) items to fit max_h."""
         height = self.surfaceSize[1]
         gap = int(height * 0.012)
         scale = 1.0
         while True:
             blocks = [
-                self._text_block(text, max(12, int(height * rel * scale)), colour, max_w, max_lines)
-                for text, rel, colour, max_lines in items
+                self._text_block(
+                    text,
+                    max(12, int(height * rel * scale)),
+                    colour,
+                    max_w,
+                    max_lines,
+                    bold,
+                )
+                for text, rel, colour, max_lines, bold in items
                 if text
             ]
             total = sum(b.get_height() for b in blocks) + gap * max(0, len(blocks) - 1)
@@ -403,10 +410,10 @@ class NowPlayingFrontend(pykka.ThreadingActor, core.CoreListener):
             self.screen.blit(block, ((self.surfaceSize[0] - block.get_width()) // 2, y))
             y += block.get_height() + gap
 
-    def _text_block(self, text, size, colour, max_w, max_lines):
+    def _text_block(self, text, size, colour, max_w, max_lines, bold=False):
         """Word-wrapped, centred text as one surface; shrinks to fit max_lines."""
         while True:
-            font = self._font(size)
+            font = self._font(size, bold=bold)
             lines = self._wrap(font, text, max_w)
             if len(lines) <= max_lines or size <= 14:
                 break
@@ -422,10 +429,13 @@ class NowPlayingFrontend(pykka.ThreadingActor, core.CoreListener):
             y += surface.get_height()
         return block
 
-    def _font(self, size):
-        font = self._fonts.get(size)
+    def _font(self, size, bold=False):
+        key = (size, bold)
+        font = self._fonts.get(key)
         if font is None:
-            font = self._fonts[size] = pygame.font.Font(self._font_file, size)
+            font = pygame.font.Font(self._font_file, size)
+            font.set_bold(bold)
+            self._fonts[key] = font
         return font
 
     @staticmethod

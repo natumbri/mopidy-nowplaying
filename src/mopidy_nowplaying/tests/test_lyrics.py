@@ -1,6 +1,9 @@
 import time
+from unittest.mock import Mock
 
-from mopidy_nowplaying.lyrics import Line, Lyrics, PositionClock, parse_lrc
+import requests
+
+from mopidy_nowplaying.lyrics import Line, Lyrics, LyricsProvider, PositionClock, TrackInfo, parse_lrc
 
 SAMPLE = """\
 [ar:Someone]
@@ -38,6 +41,33 @@ def test_index_at_and_time_at():
     assert lyrics.time_at(1) == 20_000
     assert lyrics.time_at(3) is None
     assert lyrics.text(-1) == "" and lyrics.text(9) == "" and lyrics.text(2) == "c"
+
+
+def test_index_at_uses_lead_time_and_word_dwell():
+    lyrics = Lyrics(parse_lrc("[00:10.000]one two\n[00:16.000]three\n[00:22.000]four five"))
+    assert lyrics.index_at(9_000, lead_ms=1_000) == 0
+    assert lyrics.index_at(14_500, lead_ms=1_000) == 0
+    assert lyrics.index_at(16_000, lead_ms=1_000) == 1
+    assert lyrics.index_at(17_500, lead_ms=1_000) == 1
+    assert lyrics.index_at(20_000, lead_ms=1_000) == 1
+    assert lyrics.index_at(21_500, lead_ms=1_000) == 2
+
+
+def test_provider_retries_503_and_caches_success(tmp_path):
+    info = TrackInfo("uri", "Title", ("Artist",), "Album", 30)
+    session = Mock()
+    first = Mock(status_code=503)
+    first.raise_for_status.side_effect = requests.HTTPError(response=first)
+    second = Mock(status_code=200)
+    second.json.return_value = {"syncedLyrics": "[00:10]Hello\n[00:20]World"}
+    session.get.side_effect = [first, second]
+
+    provider = LyricsProvider(session, tmp_path)
+    lines = provider.get(info)
+
+    assert [line.text for line in lines] == ["Hello", "World"]
+    assert provider._read_cache(info.uri) == lines
+    assert session.get.call_count == 2
 
 
 def test_clock_holds_when_paused_and_advances_when_running():

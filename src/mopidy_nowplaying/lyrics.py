@@ -109,9 +109,31 @@ class Lyrics:
     def __bool__(self) -> bool:
         return bool(self.lines)
 
-    def index_at(self, position_ms: float) -> int:
-        """Index of the line being sung at ``position_ms``; -1 before the first."""
-        return bisect_right(self._times, position_ms) - 1
+    @staticmethod
+    def _word_count(text: str) -> int:
+        return len(text.split()) if text.strip() else 0
+
+    def index_at(self, position_ms: float, lead_ms: int = 0, min_word_dwell_ms: int = 0) -> int:
+        """Index of the line that should be visible at ``position_ms``.
+
+        When ``lead_ms`` or ``min_word_dwell_ms`` are supplied, a line can become
+        active slightly before its timestamp and remain visible long enough to
+        keep the lyrics aligned with the music. The default behavior retains the
+        original timestamp-only semantics for compatibility.
+        """
+        if not self.lines:
+            return -1
+
+        index = -1
+        for i, line in enumerate(self.lines):
+            start_ms = self._times[i] - lead_ms
+            if position_ms < start_ms:
+                break
+            next_start_ms = self._times[i + 1] if i + 1 < len(self._times) else float("inf")
+            dwell_end_ms = self._times[i] + max(min_word_dwell_ms, self._word_count(line.text) * min_word_dwell_ms)
+            if position_ms < max(next_start_ms, dwell_end_ms):
+                index = i
+        return index
 
     def time_at(self, index: int) -> int | None:
         """Start time of line ``index``, or None when past the end."""
@@ -160,17 +182,17 @@ class LyricsProvider:
             params["album_name"] = info.album
         if info.duration_s:
             params["duration"] = info.duration_s
-        response = self._session.get(f"{LRCLIB_API}/get", params=params, timeout=REQUEST_TIMEOUT_S)
-        if response.status_code == 404:
+        response = self._request_json(f"{LRCLIB_API}/get", params)
+        if response is None:
             return None
-        response.raise_for_status()
-        return response.json()
+        return response
 
     def _search(self, info: TrackInfo) -> dict | None:
         params = {"track_name": info.title, "artist_name": info.artists[0]}
-        response = self._session.get(f"{LRCLIB_API}/search", params=params, timeout=REQUEST_TIMEOUT_S)
-        response.raise_for_status()
-        records = [r for r in response.json() if r.get("syncedLyrics")]
+        response = self._request_json(f"{LRCLIB_API}/search", params)
+        if response is None:
+            return None
+        records = [r for r in response if r.get("syncedLyrics")]
         if info.duration_s:
             # A wrong-length version would drift out of sync, so insist.
             records = [
@@ -178,6 +200,34 @@ class LyricsProvider:
             ]
             records.sort(key=lambda r: abs(r["duration"] - info.duration_s))
         return records[0] if records else None
+
+    def _request_json(self, url: str, params: dict[str, str | int]) -> dict | list | None:
+        for attempt in range(3):
+            try:
+                response = self._session.get(url, params=params, timeout=REQUEST_TIMEOUT_S)
+                if response.status_code == 404:
+                    return None
+                if response.status_code == 503 and attempt < 2:
+                    logger.warning(
+                        "mopidy-nowplaying: LRCLIB 503 for %s, retrying (%s/3)",
+                        url,
+                        attempt + 1,
+                    )
+                    time.sleep(0.1 * (attempt + 1))
+                    continue
+                response.raise_for_status()
+                return response.json()
+            except requests.HTTPError as exc:
+                if getattr(exc.response, "status_code", None) == 503 and attempt < 2:
+                    logger.warning(
+                        "mopidy-nowplaying: LRCLIB 503 for %s, retrying (%s/3)",
+                        url,
+                        attempt + 1,
+                    )
+                    time.sleep(0.1 * (attempt + 1))
+                    continue
+                raise
+        return None
 
     # -- cache ----------------------------------------------------------
 
