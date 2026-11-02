@@ -26,5 +26,9 @@ class Extension(ext.Extension):
 
     def setup(self, registry):
         from .frontend import NowPlayingFrontend
+        from .web import make_nowplaying_app
 
         registry.add("frontend", NowPlayingFrontend)
+
+        if "http:app" in registry:
+            registry.add("http:app", {"name": "nowplaying", "factory": make_nowplaying_app})

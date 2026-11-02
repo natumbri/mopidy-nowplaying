@@ -1,6 +1,7 @@
 import io
 import logging
 import os
+import tempfile
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
@@ -11,6 +12,7 @@ from mopidy import core, httpclient
 
 from . import Extension
 from .lyrics import Lyrics, LyricsProvider, PositionClock, TrackInfo
+from .web import get_control_state, status_snapshot, update_nowplaying_state
 
 logger = logging.getLogger(__name__)
 
@@ -276,12 +278,47 @@ class NowPlayingFrontend(pykka.ThreadingActor, core.CoreListener):
     # -- drawing ------------------------------------------------------------
 
     def write_framebuffer(self):
+        if not get_control_state().get("framebuffer", True):
+            return
         try:
             with open(self.fb_device, "wb") as f:
                 f.write(self.screen.get_buffer())
             logger.debug(f"mopidy-nowplaying: Wrote to {self.fb_device}")
         except Exception as e:
             logger.error(f"mopidy-nowplaying: Failed to write to {self.fb_device}: {e}")
+
+    def _web_snapshot(self):
+        if self.screen is None:
+            return
+        try:
+            png_bytes = self._encode_surface_frame(".png")
+            jpeg_bytes = self._encode_surface_frame(".jpg")
+            update_nowplaying_state(png_bytes, self._web_status(), jpeg_bytes)
+        except Exception:
+            logger.exception("mopidy-nowplaying: web snapshot failed")
+
+    def _encode_surface_frame(self, suffix: str) -> bytes:
+        with tempfile.NamedTemporaryFile(suffix=suffix) as tmp:
+            pygame.image.save(self.screen, tmp.name)
+            tmp.flush()
+            tmp.seek(0)
+            return tmp.read()
+
+    def _web_status(self):
+        try:
+            track = self.core.playback.get_current_track().get()
+            state = self.core.playback.get_state().get()
+            position = self.core.playback.get_time_position().get()
+        except Exception:
+            return status_snapshot({"track": None, "state": "stopped", "position_ms": 0})
+
+        payload = {
+            "track": track,
+            "state": state,
+            "position_ms": position,
+            "lyrics": self._lyrics.lines if self._lyrics else [],
+        }
+        return status_snapshot(payload)
 
     def render(self):
         """Compose art layer + lyrics and push to the framebuffer."""
@@ -290,10 +327,12 @@ class NowPlayingFrontend(pykka.ThreadingActor, core.CoreListener):
                 return
             try:
                 self.screen.blit(self._art_layer, (0, 0))
-                self._draw_lyrics()
+                if get_control_state().get("lyrics", True):
+                    self._draw_lyrics()
             except Exception:
                 logger.exception("mopidy-nowplaying: render failed")
             self.write_framebuffer()
+            self._web_snapshot()
 
     def _blank(self):
         with self._lock:
@@ -303,6 +342,7 @@ class NowPlayingFrontend(pykka.ThreadingActor, core.CoreListener):
             self._art_rect = self._default_art_rect()
             self.screen.fill(BLACK)
             self.write_framebuffer()
+            self._web_snapshot()
 
     def _default_art_rect(self):
         rect = pygame.Rect(0, 0, *self.scaledSize)
@@ -356,6 +396,8 @@ class NowPlayingFrontend(pykka.ThreadingActor, core.CoreListener):
     # the top band; current (bright) and next (dim) go in the bottom band.
 
     def _draw_lyrics(self):
+        if not get_control_state().get("lyrics", True):
+            return
         lyrics, index = self._lyrics, self._line_index
         if not (self.lyrics_enabled and lyrics) or index is None:
             return
