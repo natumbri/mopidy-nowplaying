@@ -1,9 +1,10 @@
 import io
 import json
 import logging
+from pathlib import Path
 import threading
 from dataclasses import asdict, is_dataclass
-from typing import Any
+from typing import Any, override
 
 import tornado.escape
 import tornado.web
@@ -157,60 +158,16 @@ class NowPlayingControlPageHandler(tornado.web.RequestHandler):
 
     def get(self) -> None:
         controls = get_control_state()
-        html = f"""
-        <html><head><meta charset="utf-8"><title>Mopidy Nowplaying</title>
-        <link rel="stylesheet" href="/mopidy/mopidy.css" type="text/css" media="screen, print">
-        <style>
-            .control-row {{ display: flex; align-items: center; gap: 0.75rem; margin: 0.9rem 0; flex-wrap: wrap; }}
-            .control-label {{ min-width: 120px; font-weight: 700; color: #1f2328; }}
-            .toggle-group {{ display: inline-flex; border: 1px solid #c3cbd4; border-radius: 4px; overflow: hidden; background: #f7f8fa; box-shadow: inset 0 0 0 1px rgba(27, 31, 35, 0.04); }}
-            .toggle {{ display: inline-block; padding: 0.5rem 0.9rem; text-decoration: none; color: #20262d; border-right: 1px solid #c3cbd4; background: #edf1f5; line-height: 1.2; font-weight: 700; }}
-            .toggle:last-child {{ border-right: none; }}
-            .toggle:hover {{ opacity: 1; text-decoration: none; }}
-            .toggle.on {{ background: #dff4e5; color: #1b4833; }}
-            .toggle.off {{ background: #f8dfe0; color: #5e2325; }}
-            .link-group {{ display: flex; flex-wrap: wrap; gap: 0.5rem; }}
-        </style></head><body>
-        <div class="box focus">
-          <h1>Mopidy Nowplaying</h1>
-          <p>
-            This page allows you to control the Mopidy Nowplaying extension and view its status.
-          </p>
-        </div>
-        <div class="box">
-            <div class="control-row">
-                <span class="control-label">Framebuffer</span>
-                <div class="toggle-group">
-                    <a class="toggle {'on' if controls['framebuffer'] else 'off'}" href="/nowplaying/toggle?name=framebuffer&value=on">On</a>
-                    <a class="toggle {'off' if controls['framebuffer'] else 'on'}" href="/nowplaying/toggle?name=framebuffer&value=off">Off</a>
-                </div>
-            </div>
-            <div class="control-row">
-                <span class="control-label">HTTP stream</span>
-                <div class="toggle-group">
-                    <a class="toggle {'on' if controls['stream'] else 'off'}" href="/nowplaying/toggle?name=stream&value=on">On</a>
-                    <a class="toggle {'off' if controls['stream'] else 'on'}" href="/nowplaying/toggle?name=stream&value=off">Off</a>
-                </div>
-            </div>
-            <div class="control-row">
-                <span class="control-label">Lyrics</span>
-                <div class="toggle-group">
-                    <a class="toggle {'on' if controls['lyrics'] else 'off'}" href="/nowplaying/toggle?name=lyrics&value=on">On</a>
-                    <a class="toggle {'off' if controls['lyrics'] else 'on'}" href="/nowplaying/toggle?name=lyrics&value=off">Off</a>
-                </div>
-            </div>
-        </div>
-        <div class="box">
-            <div class="link-group">
-                <a class="toggle" href="/nowplaying/status">JSON status</a>
-                <a class="toggle" href="/nowplaying/stream.png">PNG stream</a>
-                <a class="toggle" href="/nowplaying/stream.mjpg">MJPEG stream</a>
-            </div>
-        </div>
-        </body></html>
-        """
-        self.write(html)
+        self.render(
+                "index.html",
+                framebuffer=controls['framebuffer'],
+                stream=controls['stream'],
+                lyrics=controls['lyrics'],
+            )
 
+    @override
+    def get_template_path(self) -> str:
+        return str(Path(__file__).parent / "www")
 
 class NowPlayingToggleHandler(tornado.web.RequestHandler):
     def initialize(self, config: Any | None = None, core: Any | None = None) -> None:
